@@ -12,6 +12,9 @@ import (
 	callbackspb "go.temporal.io/server/chasm/lib/callback/gen/callbackpb/v1"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	chasmworkflowpb "go.temporal.io/server/chasm/lib/workflow/gen/workflowpb/v1"
+	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/common/searchattribute/sadefs"
+	"go.temporal.io/server/common/softassert"
 	"go.temporal.io/server/service/history/historybuilder"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -26,6 +29,9 @@ type Workflow struct {
 
 	// MSPointer is a special in-memory field for accessing the underlying mutable state.
 	chasm.MSPointer
+
+	// Visibility to store custom search attributes and memo.
+	Visibility chasm.Field[*chasm.Visibility]
 
 	// Callbacks map is used to store the callbacks for the workflow.
 	Callbacks chasm.Map[string, *callback.Callback]
@@ -70,6 +76,68 @@ func (w *Workflow) Terminate(
 	_ chasm.TerminateComponentRequest,
 ) (chasm.TerminateComponentResponse, error) {
 	return chasm.TerminateComponentResponse{}, serviceerror.NewInternal("workflow root Terminate should not be called")
+}
+
+func (w *Workflow) SearchAttributes(ctx chasm.Context) []chasm.SearchAttributeKeyValue {
+	searchAttributes, err := w.GetSearchAttributes()
+	softassert.That(
+		ctx.Logger(),
+		err == nil,
+		"failed to retrieve search attributes from mutable state execution info",
+		tag.Error(err),
+	)
+
+	var res []chasm.SearchAttributeKeyValue
+	for saName, value := range searchAttributes {
+		if !sadefs.IsMappable(saName) {
+			res = append(res, chasm.SearchAttributeKeyValue{
+				Alias: saName,
+				Field: saName,
+				Value: value,
+			})
+		}
+	}
+	return res
+}
+
+func (w *Workflow) CustomSearchAttributes(ctx chasm.Context) map[string]*commonpb.Payload {
+	if vis, ok := w.Visibility.TryGet(ctx); ok {
+		return vis.CustomSearchAttributes(ctx)
+	}
+	return nil
+}
+
+func (w *Workflow) CustomMemo(ctx chasm.Context) map[string]*commonpb.Payload {
+	if vis, ok := w.Visibility.TryGet(ctx); ok {
+		return vis.CustomMemo(ctx)
+	}
+	return nil
+}
+
+func (w *Workflow) UpdateCustomSearchAttributes(
+	ctx chasm.MutableContext,
+	searchAttributes map[string]*commonpb.Payload,
+) error {
+	if vis, ok := w.Visibility.TryGet(ctx); ok {
+		vis.MergeCustomSearchAttributes(ctx, searchAttributes)
+	} else {
+		vis := chasm.NewVisibilityWithData(ctx, searchAttributes, nil)
+		w.Visibility = chasm.NewComponentField(ctx, vis)
+	}
+	return nil
+}
+
+func (w *Workflow) UpdateCustomMemo(
+	ctx chasm.MutableContext,
+	memo map[string]*commonpb.Payload,
+) error {
+	if vis, ok := w.Visibility.TryGet(ctx); ok {
+		vis.MergeCustomMemo(ctx, memo)
+	} else {
+		vis := chasm.NewVisibilityWithData(ctx, nil, memo)
+		w.Visibility = chasm.NewComponentField(ctx, vis)
+	}
+	return nil
 }
 
 // ProcessCloseCallbacks triggers "WorkflowClosed" callbacks using the CHASM implementation.

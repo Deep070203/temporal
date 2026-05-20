@@ -3,6 +3,7 @@ package chasm
 import (
 	"time"
 
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/server/common/nexus/nexusrpc"
@@ -60,4 +61,14 @@ func (m MSPointer) GetWorkflowTypeName() string {
 // GetNexusUpdateCompletion retrieves the Nexus operation completion data for the given update ID and request ID from the underlying mutable state.
 func (m MSPointer) GetNexusUpdateCompletion(ctx Context, updateID string, requestID string) (nexusrpc.CompleteOperationOptions, error) {
 	return m.backend.GetNexusUpdateCompletion(ctx.goContext(), updateID, requestID)
+}
+
+// GetSearchAttributes retrieves the search attributes from the underlying mutable state.
+func (m MSPointer) GetSearchAttributes() (map[string]VisibilityValue, error) {
+	saMap, err := newSearchAttributesMapFromProto(
+		&commonpb.SearchAttributes{
+			IndexedFields: m.backend.GetExecutionInfo().GetSearchAttributes(),
+		},
+	)
+	return saMap.values, err
 }
